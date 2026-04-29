@@ -28,6 +28,7 @@ services:
         define( 'WP_SITEURL', 'https://b971-182-253-151-211.ngrok-free.app' );
     volumes:
       - wp_data:/var/www/html
+      - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini
     networks:
       - wp_network
     depends_on:
