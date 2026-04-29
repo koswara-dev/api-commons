@@ -62,4 +62,31 @@ async function generateImage(title) {
   }
 }
 
-module.exports = { generateArticle, generateImage };
+async function evaluateArticle(title, content) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const ai = new GoogleGenAI({ apiKey });
+
+  const prompt = `Bertindaklah sebagai editor konten senior. Berikan skor kualitas untuk artikel berikut berdasarkan SEO, keterbacaan, dan relevansi terhadap judul "${title}".
+  
+  ARTIKEL:
+  ${content}
+
+  Berikan jawaban HANYA dalam format JSON mentah seperti ini:
+  {"score": 85, "reason": "Penjelasan singkat"} `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+    });
+
+    // Membersihkan Markdown jika ada (misal ```json)
+    const cleanText = response.text.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleanText);
+  } catch (error) {
+    console.error('Evaluation Error:', error);
+    return { score: 0, reason: 'Gagal melakukan evaluasi' };
+  }
+}
+
+module.exports = { generateArticle, generateImage, evaluateArticle };

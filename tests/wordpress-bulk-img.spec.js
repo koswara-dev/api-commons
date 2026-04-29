@@ -2,11 +2,11 @@ const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const { parse } = require('csv-parse/sync');
-const { generateArticle } = require('../utils/gemini');
+const { generateArticle, evaluateArticle } = require('../utils/gemini');
 
 const dayjs = require('dayjs');
 
-test.describe('WordPress Bulk Content with Local Image Upload', () => {
+test.describe('WordPress Bulk Content with AI Quality Scoring', () => {
   const username = process.env.WP_USERNAME;
   const password = process.env.WP_APP_PASSWORD;
   const authHeader = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
@@ -76,7 +76,7 @@ test.describe('WordPress Bulk Content with Local Image Upload', () => {
 
   for (const record of records) {
     test(`should generate and post article with local image: ${record.title}`, async ({ request }) => {
-      test.setTimeout(120000); // 2 menit cukup karena tidak generate gambar
+      test.setTimeout(300000); // Set timeout to 5 minutes for retries
 
       const today = dayjs().format('YYYY-MM-DD');
       const isToday = record.posting_date === today;
@@ -92,25 +92,51 @@ test.describe('WordPress Bulk Content with Local Image Upload', () => {
       // 1. Ensure Category exists and get ID
       const categoryIds = await getOrCreateCategory(request, record.kategori);
 
-      // 2. Generate Content using Gemini
-      console.log(`Generating content for today's article...`);
-      let articleContent = await generateArticle(record.title);
-      
-      // Extract meta description if exists and clean content
-      const metaMatch = articleContent.match(/META_DESCRIPTION:\s*(.*)/i);
-      const metaDescription = metaMatch ? metaMatch[1] : '';
-      articleContent = articleContent.replace(/META_DESCRIPTION:\s*(.*)/i, '').trim();
-      
-      // Remove leading H1 if exists (safety check)
-      articleContent = articleContent.replace(/^<h1[^>]*>.*?<\/h1>/i, '').trim();
-      articleContent = articleContent.replace(/^#\s+.*$/m, '').trim();
+      let articleContent = '';
+      let metaDescription = '';
+      let isQualityPassed = false;
+      const MAX_RETRIES = 3;
 
-      // 3. Find and Upload Local Featured Image
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        console.log(`Attempt ${attempt}: Generating content...`);
+        
+        // 2. Generate Content using Gemini
+        let rawContent = await generateArticle(record.title);
+        
+        // Extract meta description and clean
+        const metaMatch = rawContent.match(/META_DESCRIPTION:\s*(.*)/i);
+        const currentMeta = metaMatch ? metaMatch[1] : '';
+        let cleanedContent = rawContent.replace(/META_DESCRIPTION:\s*(.*)/i, '').trim();
+        cleanedContent = cleanedContent.replace(/^<h1[^>]*>.*?<\/h1>/i, '').trim();
+        cleanedContent = cleanedContent.replace(/^#\s+.*$/m, '').trim();
+
+        // 3. AI Quality Scoring
+        console.log(`Evaluating quality for attempt ${attempt}...`);
+        const evaluation = await evaluateArticle(record.title, cleanedContent);
+        console.log(`Score: ${evaluation.score}/100 - ${evaluation.reason}`);
+
+        if (evaluation.score > 95) {
+          articleContent = cleanedContent;
+          metaDescription = currentMeta;
+          isQualityPassed = true;
+          break;
+        } else {
+          console.warn(`Quality too low (${evaluation.score}). Retrying...`);
+        }
+      }
+
+      if (!isQualityPassed) {
+        console.error(`Failed to reach quality threshold after ${MAX_RETRIES} attempts. Skipping.`);
+        test.skip();
+        return;
+      }
+
+      // 4. Find and Upload Local Featured Image
       const imagePath = path.join(__dirname, `../images/${record.posting_date}.png`);
       console.log(`Checking for image at: ${imagePath}`);
       const featuredMediaId = await uploadMediaFromFile(request, imagePath);
 
-      // 4. Post to WordPress
+      // 5. Post to WordPress
       const postData = {
         title: record.title,
         content: articleContent,
